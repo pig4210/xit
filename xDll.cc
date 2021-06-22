@@ -403,6 +403,9 @@ bool LoadLibraryW(DWORD PID, const std::string& dllfile)
     // 填写导入表。
     if(!DoImportTable(PE)) return false;
 
+    // TLS
+    if(!DoExecuteTLS(PE)) return false;
+
     // 设置文件加载基址。
     const auto offset = (size_t)&(NtHeaders.OptionalHeader.ImageBase) - (size_t)&DosHeader;
     const auto pImageBase = (void*)((size_t)PE->Memory + offset);
@@ -413,9 +416,6 @@ bool LoadLibraryW(DWORD PID, const std::string& dllfile)
       return false;
       }
     xlog() << "Done.\r\n";
-
-    // TLS
-    if(!DoExecuteTLS(PE)) return false;
 
     // 运行入口函数。
     if(!DoDllMain(PE)) return false;

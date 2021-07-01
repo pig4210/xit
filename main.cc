@@ -90,9 +90,8 @@ int wmain(int argc, LPCTSTR argv[])
   std::cout << "Press any key to free dll..." << std::endl;
   _getch();
 
-  const auto st = xit::UnloadDll(hProcess, PE);
+  const auto st = xit::UnloadDll(hProcess, PE, true);
 
-  VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
   CloseHandle(hProcess);
 
   CheckOK(st.tls);

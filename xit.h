@@ -135,9 +135,9 @@ struct UnloadDllST
   Result ex;
   };
 
-/// 指定卸载 DLL 。注意：失败不主动释放资源。
-UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE);
-/// 指定卸载 DLL 。注意：失败主动释放资源。
+/// 指定卸载 DLL 。
+UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE, const bool release_pe = true);
+/// 指定卸载 DLL 。
 UnloadDllST UnloadDll(LPCTSTR pid, LPVOID PE);
 
 /// 本地查找指定模块的导出函数。

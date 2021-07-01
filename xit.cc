@@ -410,11 +410,8 @@ Result RemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, LPVOID lp
     CloseHandle(hThread);
     return r;
     }
-  if(Success != ec)
-    {
-    CloseHandle(hThread);
-    return XERROR(XRemoteThread, ec);
-    }
+  CloseHandle(hThread);
+  if(Success != ec) return XERROR(XRemoteThread, ec);
   return XRETURN(ec);
   }
 ////////////////////////////////////////////////////////////////
@@ -774,7 +771,7 @@ Result LoadDll(LPCTSTR          pid,
   return res;
   }
 ////////////////////////////////////////////////////////////////
-UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE)
+UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE, const bool release_pe)
   {
   UnloadDllST st;
   st.ex = XRETURN(Success);
@@ -789,6 +786,7 @@ UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE)
   const UnloadImportST uist = {PE, &GetModuleHandleA, &FreeLibrary};
   st.import = DoShellcode(hProcess, SCSET(UnloadImport), uist);
 #undef SCSET
+  if(release_pe) VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
   return st;
   }
 UnloadDllST UnloadDll(LPCTSTR pid, LPVOID PE)
@@ -798,8 +796,7 @@ UnloadDllST UnloadDll(LPCTSTR pid, LPVOID PE)
   if(!IsOK(st.ex)) return st;
   auto hProcess = (HANDLE)st.ex;
 
-  st = UnloadDll(hProcess, PE);
-  VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+  st = UnloadDll(hProcess, PE, true);
   CloseHandle(hProcess);
   return st;
   }

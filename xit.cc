@@ -579,25 +579,19 @@ static void* ImportTableEnd()
   return &ImportTable;
   }
 ////////////////////////////////////////////////////////////////
-static Result SetImageBase(HANDLE hProcess, LPVOID PE)
+static DWORD WINAPI SetImageBase(LPVOID lpParam)
   {
-  try
-    {
-    const auto& DosHeader = *(IMAGE_DOS_HEADER*)PE;
-    const auto& NtHeaders = *(IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
-    const auto offset = (size_t)&(NtHeaders.OptionalHeader.ImageBase) - (size_t)&DosHeader;
-    void* pImageBase = (void*)((size_t)&DosHeader + offset);
-    void* ImageBase = (void*)&DosHeader;
-    if(FALSE == WriteProcessMemory(hProcess, pImageBase, &ImageBase, sizeof(ImageBase), nullptr))
-      {
-      return XERROR(XSetImageBase);
-      }
-    return XRETURN(Success);
-    }
-  catch(...)
-    {
-    return XERROR(XSetImageBase);
-    }
+  const auto& DosHeader = **(IMAGE_DOS_HEADER**)lpParam;
+  const auto& NtHeaders = *(IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
+  const auto offset = (size_t)&(NtHeaders.OptionalHeader.ImageBase) - (size_t)&DosHeader;
+  void** pImageBase = (void**)((size_t)&DosHeader + offset);
+  void* ImageBase = (void*)&DosHeader;
+  *pImageBase = ImageBase;
+  return Success;
+  }
+static void* SetImageBaseEnd()
+  {
+  return &SetImageBase;
   }
 ////////////////////////////////////////////////////////////////
 struct ExecuteTLSST
@@ -682,20 +676,21 @@ Result LoadDll(HANDLE hProcess, LPVOID PE)
   {
   // 重定位。注意：重定位之前不能填写加载基址。
   auto res = DoShellcode(hProcess,
-    &Relocation, ((size_t)&RelocationEnd - (size_t)&Relocation), PE);
+    &Relocation, (size_t)&RelocationEnd - (size_t)&Relocation, PE);
   if(!IsOK(res)) return res;
   // 填写导入表。
   const ImportTableST itst = {PE, &LoadLibraryA, &GetProcAddress};
   res = DoShellcode(hProcess,
-    &ImportTable, ((size_t)&ImportTableEnd - (size_t)ImportTable), itst);
+    &ImportTable, (size_t)&ImportTableEnd - (size_t)ImportTable, itst);
   if(!IsOK(res)) return res;
   // 填写文件加载基址。
-  res = SetImageBase(hProcess, PE);
+  res = DoShellcode(hProcess,
+    &SetImageBase, (size_t)&SetImageBaseEnd - (size_t)&SetImageBase, PE);
   if(!IsOK(res)) return res;
   // TLS
   const ExecuteTLSST etst = {PE, DLL_PROCESS_ATTACH};
   res = DoShellcode(hProcess,
-    &ExecuteTLS, ((size_t)&ExecuteTLSEnd - (size_t)&ExecuteTLS), etst);
+    &ExecuteTLS, (size_t)&ExecuteTLSEnd - (size_t)&ExecuteTLS, etst);
   if(!IsOK(res)) return res;
   // 运行入口函数。
   const ExecuteDllMainST edst = {PE, DLL_PROCESS_ATTACH};

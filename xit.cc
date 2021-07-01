@@ -1,8 +1,9 @@
 ﻿#include "xit.h"
 
-#include <Tlhelp32.h>
+#include <limits.h>
+#include <wchar.h>
 
-#include <string>
+#include <Tlhelp32.h>
 
 namespace xit
   {
@@ -154,7 +155,8 @@ Result GetModule(LPCTSTR hmod)
     // 完全转换完成，并转换成功才行。
     if(TEXT('\0') != *str_end) return XERROR(XGetModule, 2);
     if(0 == MOD) return XERROR(XGetModule, 3);
-    if(MOD < 0x10000) MOD <<= 16;
+    // 允许缺省 尾部 4 个 0 ，这里判断并自动补齐。
+    if(MOD & 0xFFFF) MOD <<= 16;
     return XRETURN(MOD);
     }
   catch(...)
@@ -201,7 +203,7 @@ Result LoadFile(LPCTSTR lpFileName, Decode_Function Decode)
     }
   if(0 != FileSize.HighPart)
     {
-    const auto r = XERROR(XLarge);
+    const auto r = XERROR(XLoadFile, 0);
     CloseHandle(hFile);
     return r;
     }
@@ -210,7 +212,7 @@ Result LoadFile(LPCTSTR lpFileName, Decode_Function Decode)
   auto hMem = LocalAlloc(LMEM_MOVEABLE | LMEM_ZEROINIT, uBytes);
   if(nullptr == hMem)
     {
-    const auto r = XERROR(XLocalAlloc);
+    const auto r = XERROR(XLoadFileLocalAlloc);
     CloseHandle(hFile);
     return r;
     }
@@ -218,7 +220,7 @@ Result LoadFile(LPCTSTR lpFileName, Decode_Function Decode)
   auto lpBuffer = LocalLock(hMem);
   if(nullptr == lpBuffer)
     {
-    const auto r = XERROR(XLocalLock);
+    const auto r = XERROR(XLoadFileLocalLock);
     CloseHandle(hFile);
     LocalFree(hMem);
     return r;
@@ -380,13 +382,50 @@ Result OpenProcess(LPCTSTR pid)
   return OpenProcess(PID);
   }
 ////////////////////////////////////////////////////////////////
+Result RemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, LPVOID lpParam)
+  {
+  auto hThread = CreateRemoteThread(hProcess, nullptr, 0, shellcode, lpParam, 0, nullptr);
+  if(nullptr == hThread) return XERROR(XCreateRemoteThread);
+
+  const auto wait = WaitForSingleObject(hThread, INFINITE);
+  if(WAIT_TIMEOUT == wait)
+    {
+    const auto r = XERROR(XWaitForSingleObject_timeout);
+    TerminateThread(hThread, 0);
+    CloseHandle(hThread);
+    return r;
+    }
+  if(WAIT_FAILED == wait ||  WAIT_OBJECT_0 != wait)
+    {
+    const auto r = XERROR(XWaitForSingleObject_fail);
+    TerminateThread(hThread, 0);
+    CloseHandle(hThread);
+    return r;
+    }
+  DWORD ec;
+  if(FALSE == GetExitCodeThread(hThread, &ec))
+    {
+    const auto r = XERROR(XGetExitCodeThread);
+    TerminateThread(hThread, 0);
+    CloseHandle(hThread);
+    return r;
+    }
+  if(Success != ec)
+    {
+    CloseHandle(hThread);
+    return XERROR(XRemoteThread, ec);
+    }
+  return XRETURN(ec);
+  }
+////////////////////////////////////////////////////////////////
 template<class T>
 static Result DoShellcode(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, const size_t size, const T& st, const bool expand = false)
   {
   const auto alignsize = (size + 0x10) - (size % 0x10);
   const auto stsize = (sizeof(st) + 0x10) - (sizeof(st) % 0x10);
-  const auto expandsize = expand ? sizeof(Result) : 0;
-  const size_t Size = alignsize + stsize + expandsize;
+  const size_t Size = alignsize + stsize + sizeof(Result);
+
+  Result res;
 
   auto Shellcode = VirtualAllocEx(hProcess, nullptr, Size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
   if(nullptr == Shellcode)
@@ -409,7 +448,7 @@ static Result DoShellcode(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, con
   if(expand)
     {
     auto pex = (LPVOID)((size_t)Shellcode + alignsize + stsize);
-    const auto res = XRETURN(Success);
+    res = XRETURN(Success);
     if(FALSE == WriteProcessMemory(hProcess, pex, &res, sizeof(res), nullptr))
       {
       const auto r = XERROR(XWriteProcessMemory);
@@ -417,60 +456,27 @@ static Result DoShellcode(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, con
       return r;
       }
     }
-  auto hThread = CreateRemoteThread(hProcess, nullptr, 0, (LPTHREAD_START_ROUTINE)Shellcode, pst, 0, nullptr);
-  if(nullptr == hThread)
+  
+  res = RemoteThread(hProcess, (LPTHREAD_START_ROUTINE)Shellcode, pst);
+  if(!IsOK(res))
     {
-    const auto r = XERROR(XCreateRemoteThread);
-    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return r;
-    }
-  const auto wait = WaitForSingleObject(hThread, INFINITE);
-  if(WAIT_TIMEOUT == wait)
-    {
-    const auto r = XERROR(XWaitForSingleObject_timeout);
-    TerminateThread(hThread, 0);
-    CloseHandle(hThread);
-    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return r;
-    }
-  if(WAIT_FAILED == wait ||  WAIT_OBJECT_0 != wait)
-    {
-    const auto r = XERROR(XWaitForSingleObject_fail);
-    TerminateThread(hThread, 0);
-    CloseHandle(hThread);
-    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return r;
-    }
-  DWORD ec;
-  if(FALSE == GetExitCodeThread(hThread, &ec))
-    {
-    const auto r = XERROR(XGetExitCodeThread);
-    TerminateThread(hThread, 0);
-    CloseHandle(hThread);
-    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return r;
-    }
-  if(Success != ec)
-    {
-    CloseHandle(hThread);
-    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return XERROR(XDoShellcode, ec);
-    }
-  if(expand)
-    {
-    auto pex = (LPVOID)((size_t)Shellcode + alignsize + stsize);
-    Result res;
-    if(FALSE == ReadProcessMemory(hProcess, pex, &res, sizeof(res), nullptr))
-      {
-      CloseHandle(hThread);
-      VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-      return XERROR(XReadProcessMemory);
-      }
-    CloseHandle(hThread);
     VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
     return res;
     }
-  CloseHandle(hThread);
+  auto ec = (DWORD)res;
+  
+  if(expand)
+    {
+    auto pex = (LPVOID)((size_t)Shellcode + alignsize + stsize);
+    if(FALSE == ReadProcessMemory(hProcess, pex, &res, sizeof(res), nullptr))
+      {
+      const auto r = XERROR(XReadProcessMemory);
+      VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
+      return r;
+      }
+    VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
+    return res;
+    }
   VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
   return XRETURN(ec);
   }
@@ -674,64 +680,80 @@ static void* UnloadImportEnd()
 ////////////////////////////////////////////////////////////////
 Result LoadDll(HANDLE hProcess, LPVOID PE)
   {
+#define SCSET(func) &func, (size_t)&func##End - (size_t)&func
   // 重定位。注意：重定位之前不能填写加载基址。
-  auto res = DoShellcode(hProcess,
-    &Relocation, (size_t)&RelocationEnd - (size_t)&Relocation, PE);
+  auto res = DoShellcode(hProcess, SCSET(Relocation), PE);
   if(!IsOK(res)) return res;
   // 填写导入表。
   const ImportTableST itst = {PE, &LoadLibraryA, &GetProcAddress};
-  res = DoShellcode(hProcess,
-    &ImportTable, (size_t)&ImportTableEnd - (size_t)ImportTable, itst);
+  res = DoShellcode(hProcess, SCSET(ImportTable), itst);
   if(!IsOK(res)) return res;
   // 填写文件加载基址。
-  res = DoShellcode(hProcess,
-    &SetImageBase, (size_t)&SetImageBaseEnd - (size_t)&SetImageBase, PE);
+  res = DoShellcode(hProcess, SCSET(SetImageBase), PE);
   if(!IsOK(res)) return res;
   // TLS
   const ExecuteTLSST etst = {PE, DLL_PROCESS_ATTACH};
-  res = DoShellcode(hProcess,
-    &ExecuteTLS, (size_t)&ExecuteTLSEnd - (size_t)&ExecuteTLS, etst);
+  res = DoShellcode(hProcess, SCSET(ExecuteTLS), etst);
   if(!IsOK(res)) return res;
   // 运行入口函数。
   const ExecuteDllMainST edst = {PE, DLL_PROCESS_ATTACH};
-  res = DoShellcode(hProcess,
-    &ExecuteDllMain, (size_t)&ExecuteDllMainEnd - (size_t)&ExecuteDllMain, edst);
+  res = DoShellcode(hProcess, SCSET(ExecuteDllMain), edst);
   if(!IsOK(res)) return res;
+#undef SCSET
   return XRETURN(PE);
   }
-Result LoadDll(LPCTSTR pid, LPCTSTR lpFileName, Decode_Function Decode)
+////////////////////////////////////////////////////////////////
+Result LoadDll(HANDLE hProcess, LPCTSTR lpFileName, Decode_Function Decode)
   {
-  // 打开进程。
-  auto res = OpenProcess(pid);
-  if(!IsOK(res)) return res;
-  auto hProcess = (HANDLE)res;
-  // 加载文件。
-  res = LoadFile(lpFileName, Decode);
-  if(!IsOK(res))
-    {
-    CloseHandle(hProcess);
-    return res;
-    }
+  auto res = LoadFile(lpFileName, Decode);
+  if(!IsOK(res))  return res;
 
   auto hMem = (HLOCAL)res;
   res = Mapping(hProcess, hMem);
   LocalFree(hMem);
-
-  if(!IsOK(res))
-    {
-    CloseHandle(hProcess);
-    return res;
-    }
-
+  if(!IsOK(res)) return res;
   auto PE = (LPVOID)res;
 
   res = LoadDll(hProcess, PE);
-
   if(!IsOK(res))
     {
     VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
     }
+  return res;
+  }
+Result LoadDll(LPCTSTR pid, LPCTSTR lpFileName, Decode_Function Decode)
+  {
+  auto res = OpenProcess(pid);
+  if(!IsOK(res)) return res;
+  auto hProcess = (HANDLE)res;
+
+  res = LoadDll(hProcess, lpFileName, Decode);
+  
   CloseHandle(hProcess);
+  
+  return res;
+  }
+////////////////////////////////////////////////////////////////
+Result LoadDll(HANDLE           hProcess,
+               HMODULE          hModule,
+               LPCTSTR          lpName,
+               LPCTSTR          lpType,
+               Decode_Function  Decode)
+  {
+  auto res = LoadRes(hModule, lpName, lpType, Decode);
+  if(!IsOK(res)) return res;
+  
+  auto hMem = (HLOCAL)res;
+  res = Mapping(hProcess, hMem);
+  LocalFree(hMem);
+  if(!IsOK(res)) return res;
+  auto PE = (LPVOID)res;
+
+  res = LoadDll(hProcess, PE);
+  if(!IsOK(res))
+    {
+    VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+    }
 
   return res;
   }
@@ -741,38 +763,14 @@ Result LoadDll(LPCTSTR          pid,
                LPCTSTR          lpType,
                Decode_Function  Decode)
   {
-  // 打开进程。
   auto res = OpenProcess(pid);
   if(!IsOK(res)) return res;
   auto hProcess = (HANDLE)res;
-  // 加载资源。
-  res = LoadRes(hModule, lpName, lpType, Decode);
-  if(!IsOK(res))
-    {
-    CloseHandle(hProcess);
-    return res;
-    }
   
-  auto hMem = (HLOCAL)res;
-  res = Mapping(hProcess, hMem);
-  LocalFree(hMem);
-
-  if(!IsOK(res))
-    {
-    CloseHandle(hProcess);
-    return res;
-    }
-
-  auto PE = (LPVOID)res;
-
-  res = LoadDll(hProcess, PE);
-
-  if(!IsOK(res))
-    {
-    VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
-    }
+  res = LoadDll(hProcess, hModule, lpName, lpType, Decode);
+  
   CloseHandle(hProcess);
-
+  
   return res;
   }
 ////////////////////////////////////////////////////////////////
@@ -780,23 +778,21 @@ UnloadDllST UnloadDll(HANDLE hProcess, LPVOID PE)
   {
   UnloadDllST st;
   st.ex = XRETURN(Success);
+#define SCSET(func) &func, (size_t)&func##End - (size_t)&func
   // TLS
   const ExecuteTLSST etst = {PE, DLL_PROCESS_DETACH};
-  st.tls = DoShellcode(hProcess,
-    &ExecuteTLS, ((size_t)&ExecuteTLSEnd - (size_t)&ExecuteTLS), etst);
+  st.tls = DoShellcode(hProcess, SCSET(ExecuteTLS), etst);
   // 运行入口函数。
   const ExecuteDllMainST edst = {PE, DLL_PROCESS_DETACH};
-  st.main = DoShellcode(hProcess,
-    &ExecuteDllMain, (size_t)&ExecuteDllMainEnd - (size_t)&ExecuteDllMain, edst);
+  st.main = DoShellcode(hProcess, SCSET(ExecuteDllMain), edst);
   // 卸载导入 DLL 。
   const UnloadImportST uist = {PE, &GetModuleHandleA, &FreeLibrary};
-  st.import = DoShellcode(hProcess,
-    &UnloadImport, (size_t)&UnloadImportEnd - (size_t)&UnloadImport, uist);
+  st.import = DoShellcode(hProcess, SCSET(UnloadImport), uist);
+#undef SCSET
   return st;
   }
 UnloadDllST UnloadDll(LPCTSTR pid, LPVOID PE)
   {
-  // 打开进程。
   UnloadDllST st;
   st.ex = OpenProcess(pid);
   if(!IsOK(st.ex)) return st;
@@ -855,6 +851,8 @@ Result LocalDllProcAddr(LPVOID PE, LPCSTR lpProcName, const bool fuzzy)
           }
         }
       }
+    
+    if(NULL == addr) return XERROR(XNoFind);
 
     // 判断是否合法。
     if((size_t)addr < (size_t)ExportEntry.VirtualAddress) return XRETURN(addr);
@@ -962,6 +960,8 @@ static DWORD WINAPI RemoteDllProcAddrShellCode(LPVOID lpParam)
         }
       }
     }
+  
+  if(NULL == addr) return XNoFind;
 
   // 判断是否合法。
   if((size_t)addr < (size_t)ExportEntry.VirtualAddress)
@@ -1017,8 +1017,10 @@ Result RemoteDllProcAddr(HANDLE hProcess, LPVOID PE, LPCSTR lpProcName, const bo
     {
     lstrcpyA(&st.ProcName[0], lpProcName);
     }
-  return DoShellcode(hProcess, &RemoteDllProcAddrShellCode,
-    (size_t)&RemoteDllProcAddrShellCodeEnd - (size_t)&RemoteDllProcAddrShellCode, st, true);
+
+#define SCSET(func) &func, (size_t)&func##End - (size_t)&func
+  return DoShellcode(hProcess, SCSET(RemoteDllProcAddrShellCode), st, true);
+#undef SCSET
   }
 ////////////////////////////////////////////////////////////////
   }

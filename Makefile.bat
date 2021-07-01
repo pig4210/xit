@@ -61,7 +61,7 @@
         set SUF=
     ) else (
         set PLAT=%1
-        set SUF=^>nul
+        set SUF=
     )
     if "%PLAT%"=="" (
         echo !!!!!!!! Need arg with x64/x86 !!!!!!!!

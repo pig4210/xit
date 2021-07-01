@@ -1,7 +1,6 @@
 ﻿#ifndef _XIT_H_
 #define _XIT_H_
 
-// 特性降级适配 VS2013 。
 // 注意：对 PE 结构没有做 严格的合法性 检查。
 // 注意：请在加上编译选项： /EHa ，以使 Windows 异常能被 c++ 异常捕获。
 
@@ -25,38 +24,39 @@ enum ERROR_ENUM
   XGetModule,
   XCreateFile,
   XGetFileSizeEx,
-  XLarge,
+  XLoadFile,
+  XLoadFileLocalAlloc,
+  XLoadFileLocalLock,
+  XReadFile,
   XLocalAlloc,
   XLocalLock,
-  XReadFile,
   XDecode,
   XFindResource,
   XLoadResource,
   XLockResource,
-  XVirtualAlloc,
   XSizeofResource,
-  XLoadRes,
   XVirtualAllocEx,
   XMappingLock,
   XMappingHeader,
   XMappingSection,
   XMapping,
   XOpenProcess,
-  XDoShellcodeNew,
-  XWriteProcessMemory,
   XCreateRemoteThread,
   XWaitForSingleObject_timeout,
   XWaitForSingleObject_fail,
   XGetExitCodeThread,
-  XDoShellcode,
+  XRemoteThread,
+  XDoShellcodeNew,
+  XWriteProcessMemory,
+  XReadProcessMemory,
   XImportDLL,
   XSetImageBase,
   XIndex,
+  XNoFind,
   XNoMod,
   XGetModuleHandleA,
   XGetProcAddress,
   XLocalDllProcAddr,
-  XReadProcessMemory,
   };
 
 typedef unsigned long long Result;
@@ -99,16 +99,28 @@ Result LoadRes(HMODULE          hModule,
 /// 平铺 DLL 。成功则返回 LPVOID 。
 Result Mapping(HANDLE hProcess, LPVOID BIN);
 
+/// 打开进程。成功则返回 HANDLE 。
 Result OpenProcess(const DWORD PID);
 Result OpenProcess(LPCTSTR pid);
 
-/// 指定加载 DLL 。成功则返回 PE 。注意：失败不主动释放资源。
+// 注意：以下函数，传入的句柄，都不主动释放。
+
+/// 执行远程线程。成功则返回 线程 DWORD 。
+Result RemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, LPVOID lpParam);
+
+/// 指定加载 DLL 。成功则返回 PE 。注意：PE 需已 Mapping 。
 Result LoadDll(HANDLE hProcess, LPVOID PE);
 
-/// 指定加载文件为 DLL 。成功则返回 LPVOID 。注意：失败主动释放资源。
+/// 指定加载文件为 DLL 。成功则返回 LPVOID 。
+Result LoadDll(HANDLE hProcess, LPCTSTR lpFileName, Decode_Function Decode = &NoDecode);
 Result LoadDll(LPCTSTR pid, LPCTSTR lpFileName, Decode_Function Decode = &NoDecode);
 
-/// 指定加载资源为 DLL 。成功则返回 LPVOID 。注意：失败主动释放资源。
+/// 指定加载资源为 DLL 。成功则返回 LPVOID 。
+Result LoadDll(HANDLE           hProcess,
+               HMODULE          hModule,
+               LPCTSTR          lpName,
+               LPCTSTR          lpType,
+               Decode_Function  Decode = &NoDecode);
 Result LoadDll(LPCTSTR          pid,
                HMODULE          hModule,
                LPCTSTR          lpName,

@@ -1,4 +1,4 @@
-﻿ifeq "$(filter x64 x86,$(Platform))" ""
+﻿ifeq "$(filter x64 x86,$(ARCH))" ""
   $(error Need VS Environment)
 endif
 
@@ -14,7 +14,7 @@ endif
 all : $(ProjectName).exe exdst
 	@echo make done.
 
-DSTPATH	:= $(Platform)
+DSTPATH	:= $(ARCH)
 
 CC 			:= cl.exe
 LINK		:= link.exe
@@ -24,17 +24,17 @@ CFLAGS		= /c /MP /GS- /Qpar /GL /analyze- /W4 /Gy /Zc:wchar_t /Zi /Gm- /Ox /Zc:i
 CFLAGS      += /I"$(SRCPATH)"
 CFLAGS		+= /Fd"$(DSTPATH)/"
 
-ifeq "$(Platform)" "x86"
+ifeq "$(ARCH)" "x86"
 CFLAGS		+= /D_USING_V110_SDK71_
 endif
 
 CFLAGS      += $(MyCFLAGS)
 
 ######## LDFLAGS
-LDFLAGS		= /MANIFEST:NO /LTCG /NXCOMPAT /DYNAMICBASE "kernel32.lib" "user32.lib" "gdi32.lib" "winspool.lib" "comdlg32.lib" "advapi32.lib" "shell32.lib" "ole32.lib" "oleaut32.lib" "uuid.lib" "odbc32.lib" "odbccp32.lib" /OPT:REF /INCREMENTAL:NO /OPT:ICF /ERRORREPORT:NONE /NOLOGO /MACHINE:$(Platform) /DEBUG:FULL
+LDFLAGS		= /MANIFEST:NO /LTCG /NXCOMPAT /DYNAMICBASE "kernel32.lib" "user32.lib" "gdi32.lib" "winspool.lib" "comdlg32.lib" "advapi32.lib" "shell32.lib" "ole32.lib" "oleaut32.lib" "uuid.lib" "odbc32.lib" "odbccp32.lib" /OPT:REF /INCREMENTAL:NO /OPT:ICF /ERRORREPORT:NONE /NOLOGO /MACHINE:$(ARCH) /DEBUG:FULL
 LDFLAGS		+= /LIBPATH:"$(DSTPATH)"
 
-ifeq "$(Platform)" "x86"
+ifeq "$(ARCH)" "x86"
 LDFLAGS_CONSOLE	:= /SAFESEH /SUBSYSTEM:CONSOLE",5.01"
 LDFLAGS_WINDOWS	:= /SAFESEH /SUBSYSTEM:WINDOWS",5.01"
 else

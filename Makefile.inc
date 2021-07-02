@@ -4,7 +4,7 @@ CFLAGS += /Zc:threadSafeInit- /DRESID=$(RESID)
 
 vpath %.res $(DSTPATH)
 
-LUA := E:\work\Lua\x64\lua.exe
+LUA := $(SRCPATH)\..\Lua\x64\lua.exe
 
 $(ProjectName)_inner.dll : test.o | $(DSTPATH)
 	$(LINK) $(LDFLAGS) /DLL $(LDFLAGS_WINDOWS) /OUT:"$(DSTPATH)/$(@F)" $(^F)

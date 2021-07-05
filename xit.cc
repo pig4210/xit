@@ -808,6 +808,8 @@ Result LocalDllProcAddr(LPVOID PE, LPCSTR lpProcName, const bool fuzzy)
     const auto& DosHeader = *(const IMAGE_DOS_HEADER*)PE;
     const auto& NtHeaders = *(const IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
     const auto& ExportEntry = *(const IMAGE_DATA_DIRECTORY*)&NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
+    if(0 == ExportEntry.Size) return XERROR(XNoExport);
     
     const auto& ExportTable = *(const IMAGE_EXPORT_DIRECTORY*)((size_t)&DosHeader + ExportEntry.VirtualAddress);
     auto pAddressOfFunction = (const DWORD*)((size_t)&DosHeader + ExportTable.AddressOfFunctions);
@@ -893,6 +895,8 @@ static DWORD WINAPI RemoteDllProcAddrShellCode(LPVOID lpParam)
   const auto& DosHeader = *(const IMAGE_DOS_HEADER*)st.PE;
   const auto& NtHeaders = *(const IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
   const auto& ExportEntry = *(const IMAGE_DATA_DIRECTORY*)&NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+  
+  if(0 == ExportEntry.Size) return XNoExport;
   
   const auto& ExportTable = *(const IMAGE_EXPORT_DIRECTORY*)((size_t)&DosHeader + ExportEntry.VirtualAddress);
   auto pAddressOfFunction = (const DWORD*)((size_t)&DosHeader + ExportTable.AddressOfFunctions);

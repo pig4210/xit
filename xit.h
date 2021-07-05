@@ -51,6 +51,7 @@ enum ERROR_ENUM
   XReadProcessMemory,
   XImportDLL,
   XSetImageBase,
+  XNoExport,
   XIndex,
   XNoFind,
   XNoMod,

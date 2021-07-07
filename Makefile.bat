@@ -17,33 +17,9 @@
     set ARCH=
     set BOTHARCH=
 
-    setlocal enabledelayedexpansion
     cl >nul 2>&1
     :: if in the compilation env , check ARCH.
-    if not ERRORLEVEL 1 (
-        :: VS2013 x86 has no Platform.
-        if "%Platform%" == "" set Platform=x86
-
-        set ARCH=x!Platform:~-2!
-        if not "!ARCH!" == "x64" (
-            if not "!ARCH!" == "x86" (
-                echo Unknow ARCH : !ARCH! !
-                setlocal disabledelayedexpansion
-                goto end
-            )
-        )
-        :: if has no arg , use ARCH default . otherwise, check equ.
-        if not "%1" == "" (
-            if not "!ARCH!" == "%1" (
-                :: if arg no equ ARCH , change the ARCH.
-                set ARCH=%1
-                setlocal disabledelayedexpansion
-                goto findmsvc
-            )
-        )
-        setlocal disabledelayedexpansion
-        goto baseconfig
-    )
+    if not ERRORLEVEL 1 goto checkarch
 
     if "%1" == "" (
         set ARCH=x64
@@ -51,9 +27,31 @@
     ) else (
         set ARCH=%1
     )
-    setlocal disabledelayedexpansion
 
     goto findmsvc
+
+:checkarch
+    :: VS2013 x86 has no Platform.
+    if "%Platform%" == "" set Platform=x86
+
+    set ARCH=x%Platform:~-2%
+
+    if not "%ARCH%" == "x64" (
+        if not "%ARCH%" == "x86" (
+            echo Unknow ARCH : %ARCH% !
+            goto end
+        )
+    )
+
+    :: if has no arg , use ARCH default . otherwise, check equ.
+    if not "%1" == "" (
+        if not "%ARCH%" == "%1" (
+            :: if arg no equ ARCH , change the ARCH.
+            set ARCH=%1
+            goto findmsvc
+        )
+    )
+    goto baseconfig
 
 :findvswhere
     set VSWHERE=vswhere

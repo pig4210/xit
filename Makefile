@@ -11,8 +11,7 @@ ifeq "$(SRCPATH)" ""
 endif
 
 .PHONY : all
-all : $(ProjectName).exe exdst
-	@echo make done.
+all :
 
 DSTPATH	:= $(ARCH)
 
@@ -56,6 +55,3 @@ $(DSTPATH) :
 
 %.o : %.cc | $(DSTPATH)
 	$(CC) $(CFLAGS) /Fo"$(DSTPATH)/$(@F)" "$<"
-
-$(ProjectName).exe : $(OBJ) | $(DSTPATH)
-	$(LINK) $(LDFLAGS) $(LDFLAGS_CONSOLE) /OUT:"$(DSTPATH)/$(@F)" $^

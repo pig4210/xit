@@ -3,7 +3,8 @@
 
 // 注意：对 PE 结构没有做 严格的合法性 检查。
 // 注意：请在加上编译选项： /EHa ，以使 Windows 异常能被 c++ 异常捕获。
-// 为保持兼容性，特意不使用类，为记。
+
+#include <cstdint>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -22,10 +23,13 @@ enum ERROR_ENUM
   XCreateToolhelp32Snapshot,
   XProcess32First,
   XGetPID,
+  XGetModule_MAX,
+  XGetModule_FAIL,
+  XGetModule_NULL,
   XGetModule,
   XCreateFile,
   XGetFileSizeEx,
-  XLoadFile,
+  XLoadFileMAX,
   XLoadFileLocalAlloc,
   XLoadFileLocalLock,
   XReadFile,
@@ -61,18 +65,41 @@ enum ERROR_ENUM
   XLocalDllProcAddr,
   };
 
-typedef unsigned long long Result;
-
-static_assert(8 == sizeof(Result),      "8 != ull");
 static_assert(4 == sizeof(ERROR_ENUM),  "4 != enum");
 static_assert(4 == sizeof(DWORD),       "4 != dword");
 
-/// 获得 XIT_ERROR_ENUM 错误码。
-ERROR_ENUM Error(const Result res);
-/// 获得 GetLastError 错误码。
-DWORD ErrorEx(const Result res);
-/// 检测是否存在错误码。
-bool IsOK(const Result res);
+class Result
+  {
+  public:
+    Result(const ERROR_ENUM e);
+    template<typename T> Result(const T& v) : _v((uint64_t)v) {}
+  public:
+    ERROR_ENUM  Error()     const;
+    DWORD       ErrorCode() const;
+  public:
+    bool        IsOK()      const;
+    operator bool() const;
+  public:
+    template<typename T> operator T() const { return (T)_v; }
+  public:
+    Result() = delete;
+  private:
+#pragma warning(push)
+#pragma warning(disable:4201)  // 使用了非标准扩展: 无名称的结构/联合
+    union
+      {
+      uint64_t _v;
+      struct
+        {
+        uint32_t    _x : 1;
+        ERROR_ENUM  _e : 31;
+        DWORD       _ec;
+        };
+      };
+#pragma warning(pop)
+  };
+
+static_assert(8 == sizeof(Result),      "8 != ull");
 
 /// 进程提权。
 Result UpperToken(HANDLE hProcess = GetCurrentProcess());

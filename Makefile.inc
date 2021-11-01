@@ -24,11 +24,13 @@ exdst.x : $(ProjectName).exe $(ProjectName)_inner.dll
 	@echo.
 	@echo.>"$(DSTPATH)\\$(@F)"
 
-.PHONY : exdst
-exdst : exdst.x
-
-
 xit.o                   : xit.h
 main.o                  : xit.h
 
 OBJ := $(ProjectName).res xit.o main.o
+
+$(ProjectName).exe : $(OBJ) | $(DSTPATH)
+	$(LINK) $(LDFLAGS) $(LDFLAGS_CONSOLE) /OUT:"$(DSTPATH)/$(@F)" $^
+
+all : $(ProjectName).exe exdst.x
+	@echo make done.

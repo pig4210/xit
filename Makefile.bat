@@ -62,7 +62,7 @@
     "%VSWHERE%" -help >nul 2>&1
     if ERRORLEVEL 1 exit /b 1
 
-    goto :EOF
+    exit /b 0
 
 :checkmsvc
     if not exist "%VCPath%" exit /b 1
@@ -76,7 +76,7 @@
     cl >nul 2>&1
     if ERRORLEVEL 1 exit /b 1
 
-    goto :EOF
+    exit /b 0
 
 :findmsvc
     call :findvswhere
@@ -115,7 +115,7 @@
         goto end
     )
 
-    set SrcPath=%MyPath%
+    set SRCPATH=%MyPath%
 
 ::main
     call :do %ARCH% || goto end
@@ -176,10 +176,10 @@
 :make
     if "%SUF%"=="" (
         echo.
-        echo %MAKE% SrcPath=%SrcPath% %1
+        echo %MAKE% SRCPATH=%SRCPATH% %1
         echo.
     )
-    %MAKE% SRCPATH="%SrcPath%" %1 %SUF% && exit /B 0
+    %MAKE% %SUF% && exit /B 0
     
     echo !!!!!!!! Make Error !!!!!!!!
     exit /B 1

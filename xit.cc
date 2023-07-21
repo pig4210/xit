@@ -149,7 +149,7 @@ Result GetModule(LPCTSTR hmod)
   #else
     strtoull(hmod, &str_end, 16);
   #endif
-    if(ULLONG_MAX != MOD) return XERROR(XGetModule, 1);
+    if(ULLONG_MAX == MOD) return XERROR(XGetModule, 1);
 #else
     unsigned long MOD =
   #ifdef UNICODE
@@ -557,7 +557,11 @@ static DWORD WINAPI Relocation(LPVOID lpParam)
   const auto& DosHeader = **(const IMAGE_DOS_HEADER**)lpParam;
   const auto& NtHeaders = *(const IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
 
-  auto pLoc = (PIMAGE_BASE_RELOCATION)((size_t)&DosHeader + NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
+  auto& dir = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+
+  auto pLoc = (PIMAGE_BASE_RELOCATION)((size_t)&DosHeader + dir.VirtualAddress);
+  
+  const auto dir_end = (size_t)&DosHeader + dir.VirtualAddress + dir.Size;
 
   // 是否有重定位表。
   if((void*)pLoc == (void*)&DosHeader) return XSuccess;
@@ -592,6 +596,7 @@ static DWORD WINAPI Relocation(LPVOID lpParam)
       }
     
     pLoc = (PIMAGE_BASE_RELOCATION)((size_t)pLoc + pLoc->SizeOfBlock);
+    if((size_t)(pLoc + sizeof(IMAGE_BASE_RELOCATION)) >= dir_end) break;
     }
 
   return XSuccess;

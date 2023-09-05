@@ -24,10 +24,9 @@ exdst.x : $(ProjectName).exe $(ProjectName)_inner.dll
 	@echo.
 	@echo.>"$(DSTPATH)\\$(@F)"
 
-xit.o                   : xit.h
 main.o                  : xit.h
 
-OBJ := $(ProjectName).res xit.o main.o
+OBJ := $(ProjectName).res main.o
 
 $(ProjectName).exe : $(OBJ) | $(DSTPATH)
 	$(LINK) $(LDFLAGS) $(LDFLAGS_CONSOLE) /OUT:"$(DSTPATH)/$(@F)" $^

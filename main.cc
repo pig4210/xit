@@ -19,7 +19,12 @@ static bool CheckOK(const xit::Result& res) {
 }
 
 int wmain(int argc, LPCTSTR argv[]) {
-  if (argc <= 1) return 0;
+  if (argc <= 1) {
+    // 因为测试用例需要创建进程，再次创建本 EXE ，所以不能简单地退出，否则 DLL 卸载时会出错。也不能 getch ，仍然太快，故这里做了个延时。
+    std::cout << "Usage : xit  pid|process_name|exe_path  [dll_path]"  << std::endl;
+    Sleep(1000);
+    return 0;
+  }
 
   xit::UpperToken(GetCurrentProcess()); // 无论是否提权成功，都尝试继续。
 
@@ -39,48 +44,75 @@ int wmain(int argc, LPCTSTR argv[]) {
     }
   }
 
-  auto res = xit::OpenProcess(argv[1]);
-  if (!CheckOK(res)) return 0;
-  auto hProcess = (HANDLE)res;
+  HANDLE hProcess = nullptr;
+  HANDLE hThread = nullptr;
 
-  if(argc == 2) {
-    res = xit::LoadRes(GetModuleHandle(nullptr), MAKEINTRESOURCE(RESID), TEXT("BIN"));
+  auto res = xit::GetPID(argv[1]);
+  if (xit::IsOK(res)) {
+    // 是 进程名 或 PID 。
+    const auto pid = (DWORD)res;
+    res = xit::OpenProcess(pid);
+    if (!CheckOK(res)) return 0;
+    hProcess = (HANDLE)res;  
   } else {
-    res = xit::LoadFile(argv[2]);
-  }
-  if (!CheckOK(res)) {
-    CloseHandle(hProcess);
-    return 0;
-  }
-  auto hMem = (HLOCAL)res;
-  res = xit::Mapping(hProcess, hMem);
-  if (!CheckOK(res)) {
-    CloseHandle(hProcess);
-    LocalFree(hMem);
-    return 0;
+    // 认为是 exe 路径。创建进程，挂起。后续操作如有失败情况，进程会被终止。
+    PROCESS_INFORMATION pi;
+    res = xit::CreateProcess(argv[1], &pi);
+    if (!CheckOK(res)) return 0;
+    hProcess = pi.hProcess;
+    hThread = pi.hThread;
+
+    // 此块功能：等待 进程 完全加载。否则会注入失败的情况。
+    res = xit::RemoteThread(hProcess, (LPTHREAD_START_ROUTINE)GetModuleHandle, nullptr);
+    // 这里即使成功， res 也是失败的，需要区分检查。
+    if (xit::XRemoteThread != xit::Error(res)) {
+      CheckOK(res);
+      CloseHandle(hThread);
+      TerminateProcess(hProcess, 0);
+      CloseHandle(hProcess);
+      return 0;
+    }
   }
 
-  LocalFree(hMem);
+  if (argc == 2) {
+    // 参数不够，则加载内置资源。
+    res = xit::LoadDll(hProcess, GetModuleHandle(nullptr), MAKEINTRESOURCE(RESID), TEXT("BIN"));
+  } else {
+    // 第三个参数，认为是 DLL 路径。
+    res = xit::LoadDll(hProcess, argv[2]);
+  }
+  if (!CheckOK(res)) {
+    if (nullptr != hThread) {
+      CloseHandle(hThread);
+      TerminateProcess(hProcess, 0);
+    }
+    CloseHandle(hProcess);
+    return 0;
+  }
   auto PE = (LPVOID)res;
-  
-  res = xit::LoadDll(hProcess, PE);
-  if (!CheckOK(res)) {
-    VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
-    CloseHandle(hProcess);
-    return 0;
-  }
-  
-  if (FALSE != IsBadReadPtr(PE, 1)) {
-    CloseHandle(hProcess);
-    std::cout << "Done." << (void*)PE << std::endl;
-    return 0;
-  }
-  
-  res = xit::RemoteDllProcAddr(hProcess, PE, "TestExport", false);
-  std::cout << (void*)res << std::endl;
+  std::cout << "PE     : " << PE << std::endl;
 
-  std::cout << "Press any key to free dll..." << std::endl;
-  _getch();
+  if (nullptr != hThread) {
+    // 如果进程是创建挂起的，则恢复。
+    ResumeThread(hThread);
+    CloseHandle(hThread);
+  }
+
+  
+  if (argc == 2) {
+    // 内置资源，则测试查找导出函数。
+    res = xit::RemoteDllProcAddr(hProcess, PE, "TestExport", false);
+    std::cout << "Export : " << (void*)res << std::endl;
+  }
+  
+
+  std::cout << "Press any key to free dll , or n to skip ..." << std::endl;
+  const auto ch = _getch();
+
+  if (ch == 'n' || ch == 'N') {
+    CloseHandle(hProcess);
+    return 0;
+  }
 
   const auto st = xit::UnloadDll(hProcess, PE, true);
 

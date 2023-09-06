@@ -22,6 +22,8 @@ exdst.x : $(ProjectName).exe $(ProjectName)_inner.dll
 	@echo.
 	@"$(DSTPATH)\\$(ProjectName).exe" $(ProjectName).exe "$(DSTPATH)\\$(ProjectName)_inner.dll"
 	@echo.
+	@"$(DSTPATH)\\$(ProjectName).exe" "$(DSTPATH)\\$(ProjectName).exe" "$(DSTPATH)\\$(ProjectName)_inner.dll"
+	@echo.
 	@echo.>"$(DSTPATH)\\$(@F)"
 
 main.o                  : xit.h

@@ -3,6 +3,7 @@
 
 // 注意：对 PE 结构没有做 严格的合法性 检查。
 // 注意：请在加上编译选项： /EHa ，以使 Windows 异常能被 c++ 异常捕获。
+// 多次尝试封装句柄类用于自动释放资源，但最终效果不理想，或是过于繁琐，或是使流程不够清晰。
 // 为保持兼容性，特意不使用类，为记。
 
 #include <limits>
@@ -19,17 +20,6 @@
 static_assert(sizeof(size_t) == sizeof(void*), "size_t != void*");
 
 class xit {
- public:
-  HANDLE hProcess;
- public:
-  xit() : hProcess(nullptr) {}
-  xit(const xit&) = delete;
-  xit(xit&&) = delete;
-  xit& operator=(const xit&) = delete;
-  xit& operator=(xit&&) = delete;
-  ~xit() {
-    if (nullptr != hProcess) CloseHandle(hProcess);
-  }
  public:
   enum ERROR_ENUM : uint32_t {
     XSuccess,
@@ -59,6 +49,7 @@ class xit {
     XMappingSection,
     XMapping,
     XOpenProcess,
+    XCreateProcess,
     XCreateRemoteThread,
     XWaitForSingleObject_timeout,
     XWaitForSingleObject_fail,
@@ -84,8 +75,8 @@ class xit {
   static_assert(4 == sizeof(DWORD), "4 != dword");
 //////////////////////////////////////////////////////////////// ERROR 相关。
  private:
-  static inline Result XERROR(const ERROR_ENUM e, const DWORD ec = GetLastError()) {
-    // 不写成一句，否则有溢出。
+  static inline Result XERROR(const ERROR_ENUM e, const DWORD ec) {
+    // 不可写成一句，有溢出。
     Result res = e | 0x80000000;
     res <<= 32;
     return res | ec;
@@ -114,7 +105,7 @@ class xit {
     if (FALSE == OpenProcessToken(hProcess,
                                   TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
                                   &TokenHandle)) {
-      return XERROR(XOpenProcessToken);
+      return XERROR(XOpenProcessToken, GetLastError());
     }
 
     TOKEN_PRIVILEGES NewState;
@@ -122,9 +113,9 @@ class xit {
     if (FALSE == LookupPrivilegeValue(nullptr,
                                       SE_DEBUG_NAME,
                                       &(NewState.Privileges[0].Luid))) {
-      const auto r = XERROR(XLookupPrivilegeValue);
+      const auto ec = GetLastError();
       CloseHandle(TokenHandle);
-      return r;
+      return XERROR(XLookupPrivilegeValue, ec);
     }
 
     NewState.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
@@ -134,9 +125,9 @@ class xit {
                                        sizeof(NewState),
                                        nullptr,
                                        nullptr)) {
-      const auto r = XERROR(XAdjustTokenPrivileges);
+      const auto ec = GetLastError();
       CloseHandle(TokenHandle);
-      return r;
+      return XERROR(XAdjustTokenPrivileges, ec);
     }
     CloseHandle(TokenHandle);
     return XRETURN(XSuccess);
@@ -165,15 +156,15 @@ class xit {
 
     auto hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (INVALID_HANDLE_VALUE == hSnapshot) {
-      return XERROR(XCreateToolhelp32Snapshot);
+      return XERROR(XCreateToolhelp32Snapshot, GetLastError());
     }
 
     PROCESSENTRY32 pe32;
     pe32.dwSize = sizeof(PROCESSENTRY32);
     if (FALSE == Process32First(hSnapshot, &pe32)) {
-      const auto r = XERROR(XProcess32First);
+      const auto ec = GetLastError();
       CloseHandle(hSnapshot);
-      return r;
+      return XERROR(XProcess32First, ec);
     }
 
     do {
@@ -184,33 +175,33 @@ class xit {
     } while (FALSE != Process32Next(hSnapshot, &pe32));
 
     CloseHandle(hSnapshot);
-    return XERROR(XGetPID);
+    return XERROR(XGetPID, 0);
   }
 //////////////////////////////////////////////////////////////// Module 提取相关。
   /// 指定 HMOUDLE 。成功则返回 HMOUDLE 。
   static inline Result GetModule(LPCTSTR hmod) {
-    try {
-      if (nullptr == hmod) return XERROR(XGetModule, 1);
-      if (0 == _tcslen(hmod)) return XERROR(XGetModule, 2);
-      auto str_end = (LPTSTR)hmod;
+  try {
+    if (nullptr == hmod) return XERROR(XGetModule, 1);
+    if (0 == _tcslen(hmod)) return XERROR(XGetModule, 2);
+    auto str_end = (LPTSTR)hmod;
 #ifdef _WIN64
-      auto MOD = _tcstoull(hmod, &str_end, 16);
-      if (ULLONG_MAX == MOD) return XERROR(XGetModule, 3);
+    auto MOD = _tcstoull(hmod, &str_end, 16);
+    if (ULLONG_MAX == MOD) return XERROR(XGetModule, 3);
 #else
-      auto MOD = _tcstoul(hmod, &str_end, 16);
-      if (ULONG_MAX == MOD) return XERROR(XGetModule, 3);
+    auto MOD = _tcstoul(hmod, &str_end, 16);
+    if (ULONG_MAX == MOD) return XERROR(XGetModule, 3);
 #endif
-      // 完全转换完成，并转换成功才行。
-      if (TEXT('\0') != *str_end) return XERROR(XGetModule, 4);
-      if (0 == MOD) return XERROR(XGetModule, 5);
+    // 完全转换完成，并转换成功才行。
+    if (TEXT('\0') != *str_end) return XERROR(XGetModule, 4);
+    if (0 == MOD) return XERROR(XGetModule, 5);
 
-      // 允许缺省 尾部 4 个 0 ，这里判断并自动补齐。
-      if (MOD & 0xFFFF) MOD <<= 16;
-      
-      return XRETURN(MOD);
-    } catch (...) {
-      return XERROR(XGetModule, 6);
-    }
+    // 允许缺省 尾部 4 个 0 ，这里判断并自动补齐。
+    if (MOD & 0xFFFF) MOD <<= 16;
+    
+    return XRETURN(MOD);
+  } catch (...) {
+    return XERROR(XGetModule, 6);
+  }
   }
  public:
 //////////////////////////////////////////////////////////////// Decode 。
@@ -238,48 +229,47 @@ class xit {
                              FILE_ATTRIBUTE_READONLY,
                              nullptr);
     if (INVALID_HANDLE_VALUE == hFile) {
-      return XERROR(XCreateFile);
+      return XERROR(XCreateFile, GetLastError());
     }
 
     // 查询大小。
     LARGE_INTEGER FileSize;
     if (FALSE == GetFileSizeEx(hFile, &FileSize)) {
-      const auto r = XERROR(XGetFileSizeEx);
+      const auto ec = GetLastError();
       CloseHandle(hFile);
-      return r;
+      return XERROR(XGetFileSizeEx, ec);
     }
     if (0 != FileSize.HighPart) {
-      const auto r = XERROR(XLoadFile, 1);
       CloseHandle(hFile);
-      return r;
+      return XERROR(XLoadFile, 1);
     }
 
     // 申请内存。
     const auto uBytes = FileSize.LowPart;
     auto hMem = LocalAlloc(LMEM_MOVEABLE | LMEM_ZEROINIT, uBytes);
     if (nullptr == hMem) {
-      const auto r = XERROR(XLoadFileLocalAlloc);
+      const auto ec = GetLastError();
       CloseHandle(hFile);
-      return r;
+      return XERROR(XLoadFileLocalAlloc, ec);
     }
 
     // 锁定内存。
     auto lpBuffer = LocalLock(hMem);
     if (nullptr == lpBuffer) {
-      const auto r = XERROR(XLoadFileLocalLock);
+      const auto ec = GetLastError();
       LocalFree(hMem);
       CloseHandle(hFile);
-      return r;
+      return XERROR(XLoadFileLocalLock, ec);
     }
 
     // 读取文件。
     DWORD NumberOfBytesRead = 0;
     if (FALSE == ReadFile(hFile, lpBuffer, uBytes, &NumberOfBytesRead, nullptr)) {
-      const auto r = XERROR(XReadFile);
+      const auto ec = GetLastError();
       LocalUnlock(hMem);
       LocalFree(hMem);
       CloseHandle(hFile);
-      return r;
+      return XERROR(XReadFile, ec);
     }
 
     // 释放文件句柄。
@@ -288,20 +278,20 @@ class xit {
     // 申请可写缓存。
     auto hMEM = LocalAlloc(LMEM_MOVEABLE | LMEM_ZEROINIT, uBytes);
     if (nullptr == hMEM) {
-      const auto r = XERROR(XLocalAlloc);
+      const auto ec = GetLastError();
       LocalUnlock(hMem);
       LocalFree(hMem);
-      return r;
+      return XERROR(XLocalAlloc, ec);
     }
 
     // 锁定内存。
     auto BIN = LocalLock(hMEM);
     if (nullptr == BIN) {
-      const auto r = XERROR(XLocalLock);
+      const auto ec = GetLastError();
       LocalFree(hMEM);
       LocalUnlock(hMem);
       LocalFree(hMem);
-      return r;
+      return XERROR(XLocalLock, ec);
     }
   
     const auto ok = Decode(BIN, lpBuffer, uBytes);
@@ -325,26 +315,26 @@ class xit {
                                Decode_Function  Decode = &NoDecode) {
     // 加载资源。注意到：资源句柄无需释放。
     auto hResInfo = FindResource(hModule, lpName, lpType);
-    if (nullptr == hResInfo) return XERROR(XFindResource);
+    if (nullptr == hResInfo) return XERROR(XFindResource, GetLastError());
 
     auto hResData = LoadResource(hModule, hResInfo);
-    if (nullptr == hResData) return XERROR(XLoadResource);
+    if (nullptr == hResData) return XERROR(XLoadResource, GetLastError());
 
     auto RES = LockResource(hResData);
-    if (nullptr == RES) return XERROR(XLockResource);
+    if (nullptr == RES) return XERROR(XLockResource, GetLastError());
 
     auto uBytes = SizeofResource(hModule, hResInfo);
-    if (0 == uBytes) return XERROR(XSizeofResource);
+    if (0 == uBytes) return XERROR(XSizeofResource, GetLastError());
 
     // 申请可写缓存。
     auto hMem = LocalAlloc(LMEM_MOVEABLE | LMEM_ZEROINIT, uBytes);
-    if (nullptr == hMem) return XERROR(XLocalAlloc);
+    if (nullptr == hMem) return XERROR(XLocalAlloc, GetLastError());
 
     auto BIN = LocalLock(hMem);
     if (nullptr == BIN) {
-      const auto r = XERROR(XLocalLock);
+      const auto ec = GetLastError();
       LocalFree(hMem);
-      return r;
+      return XERROR(XLocalLock, ec);
     }
 
     const auto ok = Decode(BIN, RES, uBytes);
@@ -362,7 +352,7 @@ class xit {
   /// 平铺 DLL 。成功则返回 LPVOID 。
   static inline Result Mapping(HANDLE hProcess, HLOCAL hMem) {
     auto BIN = LocalLock(hMem);
-    if (nullptr == BIN) return XERROR(XMappingLock);
+    if (nullptr == BIN) return XERROR(XMappingLock, GetLastError());
 
     try {
       const auto& DosHeader = *(IMAGE_DOS_HEADER*)BIN;
@@ -376,9 +366,9 @@ class xit {
                                MEM_COMMIT,
                                PAGE_EXECUTE_READWRITE);
       if (nullptr == PE) {
-        const auto r = XERROR(XVirtualAllocEx);
+        const auto ec = GetLastError();
         LocalUnlock(hMem);
-        return r;
+        return XERROR(XVirtualAllocEx, ec);
       }
 
       // 所有 头 + 节表 头大小。
@@ -386,10 +376,10 @@ class xit {
 
       // 写入所有 头 + 节表 头。
       if (FALSE == WriteProcessMemory(hProcess, PE, &DosHeader, SizeOfHeaders, nullptr)) {
-        const auto r = XERROR(XMappingHeader);
+        const auto ec = GetLastError();
         VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
         LocalUnlock(hMem);
-        return r;
+        return XERROR(XMappingHeader, ec);
       }
 
       // 节表数量。
@@ -409,10 +399,10 @@ class xit {
         auto dst = (void*)((size_t)PE + pSectionHeader->VirtualAddress);
 
         if (FALSE == WriteProcessMemory(hProcess, dst, src, pSectionHeader->SizeOfRawData, nullptr)) {
-          const auto r = XERROR(XMappingSection);
+          const auto ec = GetLastError();
           VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
           LocalUnlock(hMem);
-          return r;
+          return XERROR(XMappingSection, ec);
         }
 
         ++pSectionHeader;
@@ -422,7 +412,7 @@ class xit {
       return XRETURN(PE);
     } catch(...) {
       LocalUnlock(hMem);
-      return XERROR(XMapping);
+      return XERROR(XMapping, 1);
     }
   }
  public:
@@ -432,7 +422,7 @@ class xit {
     auto hProcess = ::OpenProcess(
         PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
         TRUE, PID);
-    if (nullptr == hProcess) return XERROR(XOpenProcess);
+    if (nullptr == hProcess) return XERROR(XOpenProcess, GetLastError());
   
     return XRETURN(hProcess);
   }
@@ -444,44 +434,71 @@ class xit {
     const auto PID = (DWORD)res;
     return OpenProcess(PID);
   }
-  
+  /**
+    指定 路径，创建进程。
+
+    \param process_info 传入 PROCESS_INFORMATION 结构体指针 。不为 nullptr 时，则进挂起方式创建进程。
+    \return 成功则返回 进程句柄 。
+  */
+  static inline Result CreateProcess(LPCTSTR path, PROCESS_INFORMATION* process_info) {
+    const auto hold = nullptr != process_info;
+    PROCESS_INFORMATION tpi;
+    PROCESS_INFORMATION* const pi = hold ? process_info : &tpi;
+    STARTUPINFO si = { sizeof(si) };
+
+    if (FALSE == ::CreateProcess(path,
+                                 nullptr,
+                                 nullptr,
+                                 nullptr,
+                                 FALSE,
+                                 hold ? CREATE_SUSPENDED : 0,
+                                 nullptr,
+                                 nullptr,
+                                 &si,
+                                 pi)) {
+      return XERROR(XCreateProcess, GetLastError());
+    }
+
+    if (!hold) CloseHandle(pi->hThread);
+    return XRETURN(pi->hProcess);
+  }
 //////////////////////////////////////////////////////////////// 远程线程 。
  public:
   /// 执行远程线程。成功则返回 线程 DWORD 。
   static inline Result RemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, LPVOID lpParam) {
     auto hThread = CreateRemoteThread(hProcess, nullptr, 0, shellcode, lpParam, 0, nullptr);
-    if (nullptr == hThread) return XERROR(XCreateRemoteThread);
+    if (nullptr == hThread) return XERROR(XCreateRemoteThread, GetLastError());
 
     const auto wait = WaitForSingleObject(hThread, INFINITE);
     if (WAIT_TIMEOUT == wait) {
-      const auto r = XERROR(XWaitForSingleObject_timeout);
+      const auto ec = GetLastError();
       TerminateThread(hThread, 0);
       CloseHandle(hThread);
-      return r;
+      return XERROR(XWaitForSingleObject_timeout, ec);
       }
     if (WAIT_FAILED == wait ||  WAIT_OBJECT_0 != wait) {
-      const auto r = XERROR(XWaitForSingleObject_fail);
+      const auto ec = GetLastError();
       TerminateThread(hThread, 0);
       CloseHandle(hThread);
-      return r;
+      return XERROR(XWaitForSingleObject_fail, ec);
     }
 
-    DWORD ec;
-    if (FALSE == GetExitCodeThread(hThread, &ec)) {
-      const auto r = XERROR(XGetExitCodeThread);
+    DWORD tec;
+    if (FALSE == GetExitCodeThread(hThread, &tec)) {
+      const auto ec = GetLastError();
       TerminateThread(hThread, 0);
       CloseHandle(hThread);
-      return r;
+      return XERROR(XGetExitCodeThread, ec);
     }
 
     CloseHandle(hThread);
-    if (XSuccess != ec) return XERROR(XRemoteThread, ec);
+    if (XSuccess != tec) return XERROR(XRemoteThread, tec);
 
-    return XRETURN(ec);
+    return XRETURN(tec);
   }
- private:
 //////////////////////////////////////////////////////////////// 以下是 shellcode 部分。
 //////////////////////////////////////////////////////////////// DoShellcode 。
+ private:
   template<class T>
   static inline Result DoShellcode(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, const size_t size, const T& st, const bool expand = false) {
     const auto alignsize = (size + 0x10) - (size % 0x10);
@@ -491,28 +508,28 @@ class xit {
     Result res;
 
     auto Shellcode = VirtualAllocEx(hProcess, nullptr, Size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (nullptr == Shellcode) return XERROR(XDoShellcodeNew);
+    if (nullptr == Shellcode) return XERROR(XDoShellcodeNew, GetLastError());
 
     if (FALSE == WriteProcessMemory(hProcess, Shellcode, shellcode, size, nullptr)) {
-      const auto r = XERROR(XWriteProcessMemory);
+      const auto ec = GetLastError();
       VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-      return r;
+      return XERROR(XWriteProcessMemory, ec);
     }
 
     auto pst = (LPVOID)((size_t)Shellcode + alignsize);
     if (FALSE == WriteProcessMemory(hProcess, pst, &st, sizeof(st), nullptr)) {
-      const auto r = XERROR(XWriteProcessMemory);
+      const auto ec = GetLastError();
       VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-      return r;
+      return XERROR(XWriteProcessMemory, ec);
     }
 
     if (expand) {
       auto pex = (LPVOID)((size_t)Shellcode + alignsize + stsize);
       res = XRETURN(XSuccess);
       if (FALSE == WriteProcessMemory(hProcess, pex, &res, sizeof(res), nullptr)) {
-        const auto r = XERROR(XWriteProcessMemory);
+        const auto ec = GetLastError();
         VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-        return r;
+        return XERROR(XWriteProcessMemory, ec);
       }
     }
     
@@ -521,14 +538,14 @@ class xit {
       VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
       return res;
     }
-    auto ec = (DWORD)res;
+    auto tec = (DWORD)res;
     
     if (expand) {
       auto pex = (LPVOID)((size_t)Shellcode + alignsize + stsize);
       if (FALSE == ReadProcessMemory(hProcess, pex, &res, sizeof(res), nullptr)) {
-        const auto r = XERROR(XReadProcessMemory);
+        const auto ec = GetLastError();
         VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-        return r;
+        return XERROR(XReadProcessMemory, ec);
       }
 
       VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
@@ -536,7 +553,7 @@ class xit {
     }
 
     VirtualFreeEx(hProcess, Shellcode, 0, MEM_RELEASE);
-    return XRETURN(ec);
+    return XRETURN(tec);
   }
 //////////////////////////////////////////////////////////////// 重定位。
   /*
@@ -684,7 +701,7 @@ class xit {
     auto callback = (PIMAGE_TLS_CALLBACK*)tls.AddressOfCallBacks;
     if (0 == callback) return XSuccess;
 
-    for(; *callback; ++callback) {
+    for (; *callback; ++callback) {
       (*callback)((LPVOID)&DosHeader, st.dwReason, nullptr);
     }
 
@@ -951,14 +968,14 @@ class xit {
     ++p;
 
     HMODULE hMod = GetModuleHandleA(reload);
-    if (NULL == hMod)  return XERROR(XGetModuleHandleA);
+    if (NULL == hMod)  return XERROR(XGetModuleHandleA, 0);
 
     FARPROC func = GetProcAddress(hMod, p);
-    if (NULL == func)  return XERROR(XGetProcAddress);
+    if (NULL == func)  return XERROR(XGetProcAddress, 0);
 
     return XRETURN(func);
   } catch(...) {
-    return XERROR(XLocalDllProcAddr);
+    return XERROR(XLocalDllProcAddr, 0);
   }
   }
 //////////////////////////////////////////////////////////////// 远程导出函数。

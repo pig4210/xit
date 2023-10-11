@@ -73,6 +73,7 @@ int wmain(int argc, LPCTSTR argv[]) {
       return 0;
     }
   }
+  // 本来想要判断 进程 x64/x86 ，再判断 DLL 比较x64/x86 ，但意义不大，故先放弃。
 
   if (argc == 2) {
     // 参数不够，则加载内置资源。

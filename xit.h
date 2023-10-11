@@ -221,13 +221,13 @@ class xit {
   /// 指定加载文件。成功则返回 HLOCAL。
   static inline Result LoadFile(LPCTSTR lpFileName, Decode_Function Decode = &NoDecode) {
     // 打开文件。
-    auto hFile = CreateFileW(lpFileName,
-                             GENERIC_READ,
-                             FILE_SHARE_READ,
-                             nullptr,
-                             OPEN_EXISTING,
-                             FILE_ATTRIBUTE_READONLY,
-                             nullptr);
+    auto hFile = CreateFile(lpFileName,
+                            GENERIC_READ,
+                            FILE_SHARE_READ,
+                            nullptr,
+                            OPEN_EXISTING,
+                            FILE_ATTRIBUTE_READONLY,
+                            nullptr);
     if (INVALID_HANDLE_VALUE == hFile) {
       return XERROR(XCreateFile, GetLastError());
     }

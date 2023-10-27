@@ -16,6 +16,7 @@
 #undef WIN32_LEAN_AND_MEAN
 #include <tchar.h>
 #include <tlhelp32.h>
+#include <Psapi.h>
 
 static_assert(sizeof(size_t) == sizeof(void*), "size_t != void*");
 
@@ -67,6 +68,10 @@ class xit {
     XGetModuleHandleA,
     XGetProcAddress,
     XLocalDllProcAddr,
+    XGetMappedFileName,
+    XGetLogicalDriveStrings,
+    XQueryDosDevice,
+    XNoFound
   };
  public:
   using Result = unsigned long long;
@@ -572,8 +577,14 @@ class xit {
     假设 Base 是 0x600000 ，而文件中设置的缺省 ImageBase 是 0x400000 ，则修正偏移量就是 0x200000 。
     注意重定位表的位置可能和硬盘文件中的偏移地址不同，应该使用加载后的地址。
   */
+  struct RelocationST {
+    LPVOID PE;
+    LPVOID Base;
+  };
   static inline DWORD WINAPI Relocation(LPVOID lpParam) {
-    const auto& DosHeader = **(const IMAGE_DOS_HEADER**)lpParam;
+    const auto& st = *(const RelocationST*)lpParam;
+
+    const auto& DosHeader = *(const IMAGE_DOS_HEADER*)st.PE;
     const auto& NtHeaders = *(const IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
 
     auto& dir = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
@@ -586,7 +597,7 @@ class xit {
     if ((void*)pLoc == (void*)&DosHeader) return XSuccess;
 
     // 计算修正值。
-    const size_t Delta = (size_t)&DosHeader - NtHeaders.OptionalHeader.ImageBase;
+    const size_t Delta = (size_t)st.Base - NtHeaders.OptionalHeader.ImageBase;
 
     // 扫描重定位表。
     while (0 != (pLoc->VirtualAddress + pLoc->SizeOfBlock)) {
@@ -765,7 +776,8 @@ class xit {
 #define SCSET(func) &func, (size_t)&func##End - (size_t)&func
 
     // 重定位。注意：重定位之前不能填写加载基址。
-    auto res = DoShellcode(hProcess, SCSET(Relocation), PE);
+    RelocationST rst = {PE, PE};
+    auto res = DoShellcode(hProcess, SCSET(Relocation), rst);
     if (!IsOK(res)) return res;
 
     // 填写导入表。
@@ -977,6 +989,88 @@ class xit {
   } catch(...) {
     return XERROR(XLocalDllProcAddr, 0);
   }
+  }
+  /// 指定 DLL 模块，镜像之。
+  static inline Result DLLMirror(HANDLE hProcess, HMODULE hModule) {
+    /*
+      注意到：
+      GetModuleFileName 与 CreateToolhelp32Snapshot(TH32CS_SNAPMODULE32 | TH32CS_SNAPMODULE) 都不能正确获取模块路径。其返回 system32 路径，但实际应该是 sysWOW64 。
+    */
+    TCHAR Filename[MAX_PATH];
+    if (0 == GetMappedFileName(hProcess, hModule, Filename, _countof(Filename))) {
+      return XERROR(XGetMappedFileName, GetLastError());
+    }
+
+    TCHAR drivers[512];
+    drivers[0] = TEXT('\0');
+    const auto dl = GetLogicalDriveStrings(_countof(drivers), drivers);
+    if (0 == dl) return XERROR(XGetLogicalDriveStrings, GetLastError());
+    if (_countof(drivers) <= dl) return XERROR(XGetLogicalDriveStrings, GetLastError());
+
+    TCHAR dev[MAX_PATH];
+    TCHAR driver[3] = TEXT(" :");
+    bool found = false;
+    TCHAR* p = drivers;
+    do {
+      *driver = *p;
+      // 注意到 QueryDosDevice 的返回长度不能用。
+      if (0 == QueryDosDevice(driver, dev, _countof(dev))) {
+        return XERROR(XQueryDosDevice, GetLastError());
+      }
+      const auto devlen = _tcslen(dev);
+      if (0 == _tcsnicmp(Filename, dev, devlen) && TEXT('\\') == Filename[devlen]) {
+        found = true;
+        _tcscpy_s(Filename, driver);
+        _tcscat_s(Filename, &Filename[devlen]);
+        break;
+      }
+      while (*p++);
+    } while (!found && *p);
+    
+    if(!found) return XERROR(XNoFound, 0);
+
+    auto ret = LoadFile(Filename);
+    if (!IsOK(ret)) return ret;
+
+    auto hMem = (HLOCAL)ret;
+    ret = Mapping(hProcess, hMem);
+    LocalFree(hMem);
+    if (!IsOK(ret)) return ret;
+    auto PE = (LPVOID)ret;
+    
+    if (GetCurrentProcess() == hProcess) {
+      // 当前进程，不使用线程，避免死锁。
+      RelocationST rst = {PE, hModule};
+      Relocation(&rst);
+    } else {
+      
+#define SCSET(func) &func, (size_t)&func##End - (size_t)&func
+    // 重定位。注意：重定位之前不能填写加载基址。
+    RelocationST rst = {PE, hModule};
+    auto res = DoShellcode(hProcess, SCSET(Relocation), rst);
+    if (!IsOK(res)) {
+        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+        return res;
+      }
+
+    // 填写导入表。
+    const ImportTableST itst = {PE, &LoadLibraryA, &GetProcAddress};
+    res = DoShellcode(hProcess, SCSET(ImportTable), itst);
+    if (!IsOK(res)) {
+        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+        return res;
+      }
+
+    // 填写文件加载基址。
+    res = DoShellcode(hProcess, SCSET(SetImageBase), PE);
+    if (!IsOK(res)) {
+        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+        return res;
+      }
+#undef SCSET
+    }
+
+    return XRETURN(PE);
   }
 //////////////////////////////////////////////////////////////// 远程导出函数。
  private:

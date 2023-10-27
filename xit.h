@@ -506,6 +506,17 @@ class xit {
  private:
   template<class T>
   static inline Result DoShellcode(HANDLE hProcess, LPTHREAD_START_ROUTINE shellcode, const size_t size, const T& st, const bool expand = false) {
+    // 如果是当前进程，直接执行。而不再开远程线程。
+    if (GetCurrentProcess() == hProcess) {
+      struct EST {
+        T st;
+        Result res;
+      };
+      EST est = { st, XRETURN(XSuccess) };
+      auto res = shellcode(&est);
+      if (expand) return (XSuccess == est.res) ? XRETURN(XSuccess) : XERROR((xit::ERROR_ENUM)est.res, 0);
+      return (XSuccess == res) ? XRETURN(XSuccess) : XERROR((xit::ERROR_ENUM)res, 0);
+    }
     const auto alignsize = (size + 0x10) - (size % 0x10);
     const auto stsize = (sizeof(st) + 0x10) - (sizeof(st) % 0x10);
     const size_t Size = alignsize + stsize + sizeof(Result);
@@ -642,9 +653,10 @@ class xit {
 
     const auto& DosHeader = *(const IMAGE_DOS_HEADER*)st.PE;
     const auto& NtHeaders = *(const IMAGE_NT_HEADERS*)((size_t)&DosHeader + DosHeader.e_lfanew);
+    const auto itva = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (0 == itva) return XSuccess;
 
-    auto pImportTable = (PIMAGE_IMPORT_DESCRIPTOR)((size_t)&DosHeader +
-        NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+    auto pImportTable = (PIMAGE_IMPORT_DESCRIPTOR)((size_t)&DosHeader + itva);
 
     for (; 0 != pImportTable->OriginalFirstThunk; ++pImportTable) {
       // 获取导入表中 DLL 名称并加载。
@@ -1038,37 +1050,30 @@ class xit {
     if (!IsOK(ret)) return ret;
     auto PE = (LPVOID)ret;
     
-    if (GetCurrentProcess() == hProcess) {
-      // 当前进程，不使用线程，避免死锁。
-      RelocationST rst = {PE, hModule};
-      Relocation(&rst);
-    } else {
-      
 #define SCSET(func) &func, (size_t)&func##End - (size_t)&func
     // 重定位。注意：重定位之前不能填写加载基址。
     RelocationST rst = {PE, hModule};
     auto res = DoShellcode(hProcess, SCSET(Relocation), rst);
     if (!IsOK(res)) {
-        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
-        return res;
-      }
+      VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+      return res;
+    }
 
     // 填写导入表。
     const ImportTableST itst = {PE, &LoadLibraryA, &GetProcAddress};
     res = DoShellcode(hProcess, SCSET(ImportTable), itst);
     if (!IsOK(res)) {
-        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
-        return res;
-      }
+      VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+      return res;
+    }
 
     // 填写文件加载基址。
     res = DoShellcode(hProcess, SCSET(SetImageBase), PE);
     if (!IsOK(res)) {
-        VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
-        return res;
-      }
-#undef SCSET
+      VirtualFreeEx(hProcess, PE, 0, MEM_RELEASE);
+      return res;
     }
+#undef SCSET
 
     return XRETURN(PE);
   }
